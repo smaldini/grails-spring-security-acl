@@ -169,7 +169,7 @@ class SpringSecurityAclGrailsPlugin {
           bean.scope = scope
         }
       }
-      SPU.buildProxy(delegate, classLoader, proxyBeanName, newClass, beanName, ['methodSecurityInterceptor'])
+      SPU.buildProxy(beanDefinitions, classLoader, proxyBeanName, newClass, beanName, ['methodSecurityInterceptor'])
 
       beanDefinitions.registerBeans(event.ctx)
 

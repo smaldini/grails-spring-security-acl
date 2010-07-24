@@ -72,7 +72,6 @@ import org.springframework.security.acls.domain.SidRetrievalStrategyImpl
 import org.springframework.security.core.GrantedAuthority
 import org.springframework.security.core.authority.AuthorityUtils
 import org.springframework.security.core.authority.GrantedAuthorityImpl
-import grails.plugin.scopedproxy.ScopedProxyUtils as SPU
 
 /**
  * @author <a href='mailto:burt@burtbeckwith.com'>Burt Beckwith</a>
@@ -81,7 +80,7 @@ class SpringSecurityAclGrailsPlugin {
 
   String version = '0.2'
   String grailsVersion = '1.2.2 > *'
-  Map dependsOn = ['springSecurityCore': '0.4 > *', 'scoped-proxy': '0.2 > *']
+  Map dependsOn = ['springSecurityCore': '0.4 > *']
   List pluginExcludes = [
           'docs/**',
           'src/docs/**',
@@ -130,7 +129,7 @@ class SpringSecurityAclGrailsPlugin {
 
     // secured services
     configureSecuredServices.delegate = delegate
-    configureSecuredServices conf, application
+    configureSecuredServices conf, application, manager
 
     // MetadataSource
     configureSecurityMetadataSource.delegate = delegate
@@ -153,29 +152,31 @@ class SpringSecurityAclGrailsPlugin {
   }
 
   def onChange = {event ->
-    if (application.isServiceClass(event.source)) {
-      def classLoader = application.classLoader
-      def newClass = classLoader.loadClass(event.source.name, false) // make sure we get the new class
-      def grailsClass = application.getServiceClass(event.source.name)
-      def beanName = grailsClass.propertyName
-      def scope = SPU.getScope(newClass)
-      def proxyBeanName = SPU.getProxyBeanName(beanName)
+    if (manager?.hasGrailsPlugin('scoped-proxy')) {
+      if (application.isServiceClass(event.source)) {
+        def classLoader = application.classLoader
+        def SPU = classLoader.loadClass('grails.plugin.scopedproxy.ScopedProxyUtils', false)
+        def newClass = classLoader.loadClass(event.source.name, false) // make sure we get the new class
+        def grailsClass = application.getServiceClass(event.source.name)
+        def beanName = grailsClass.propertyName
+        def scope = SPU.getScope(newClass)
+        def proxyBeanName = SPU.getProxyBeanName(beanName)
 
-      SPU.fireWillReloadIfNecessary(application, proxyBeanName, beanName)
+        SPU.fireWillReloadIfNecessary(application, proxyBeanName, beanName)
 
-      def beanDefinitions = beans {
-        "$proxyBeanName"(grailsClass.getClazz()) { bean ->
-          bean.autowire = true
-          bean.scope = scope
+        def beanDefinitions = beans {
+          "$proxyBeanName"(grailsClass.getClazz()) { bean ->
+            bean.autowire = true
+            bean.scope = scope
+          }
         }
+        SPU.buildProxy(beanDefinitions, classLoader, proxyBeanName, newClass, beanName, ['methodSecurityInterceptor'])
+
+        beanDefinitions.registerBeans(event.ctx)
+
+        SPU.fireWasReloadedIfNecessary(application, proxyBeanName, beanName)
       }
-      SPU.buildProxy(beanDefinitions, classLoader, proxyBeanName, newClass, beanName, ['methodSecurityInterceptor'])
-
-      beanDefinitions.registerBeans(event.ctx)
-
-      SPU.fireWasReloadedIfNecessary(application, proxyBeanName, beanName)
     }
-
   }
 
   private configureCoreBeans = { conf ->
@@ -233,7 +234,7 @@ class SpringSecurityAclGrailsPlugin {
     }
   }
 
-  private configureSecuredServices = { conf, application ->
+  private configureSecuredServices = { conf, application, manager ->
 
     debug 'configuring secured services'
 
@@ -247,19 +248,40 @@ class SpringSecurityAclGrailsPlugin {
       }
     }
 
-    def serviceName, clazz, scope, proxyName
-    for (serviceClass in application.serviceClasses) {
-      boolean hasSpringSecurityACL = GCU.isStaticProperty(serviceClass.clazz, 'springSecurityACL')
-      if (hasSpringSecurityACL || serviceIsAnnotated(serviceClass.clazz)) {
-        serviceName = serviceClass.propertyName
-        proxyName = SPU.getProxyBeanName(serviceName)
-        clazz = serviceClass.clazz
-        scope = SPU.getScope(clazz)
-        "$proxyName"(serviceClass.getClazz()) { bean ->
-          bean.autowire = true
-          bean.scope = scope
+    if (manager?.hasGrailsPlugin('scoped-proxy')) {
+      def serviceName, clazz, scope, proxyName
+      def classLoader = application.classLoader
+      def SPU = classLoader.loadClass('grails.plugin.scopedproxy.ScopedProxyUtils', false)
+
+      for (serviceClass in application.serviceClasses) {
+        boolean hasSpringSecurityACL = GCU.isStaticProperty(serviceClass.clazz, 'springSecurityACL')
+        if (hasSpringSecurityACL || serviceIsAnnotated(serviceClass.clazz)) {
+          serviceName = serviceClass.propertyName
+          proxyName = SPU.getProxyBeanName(serviceName)
+          clazz = serviceClass.clazz
+          scope = SPU.getScope(clazz)
+          "$proxyName"(serviceClass.getClazz()) { bean ->
+            bean.autowire = true
+            bean.scope = scope
+          }
+          SPU.buildProxy(delegate, application.classLoader, proxyName, clazz, serviceName, ['methodSecurityInterceptor'])
         }
-        SPU.buildProxy(delegate, application.classLoader, proxyName, clazz, serviceName, ['methodSecurityInterceptor'])
+      }
+    } else {
+      def serviceNames = []
+      for (serviceClass in application.serviceClasses) {
+        boolean hasSpringSecurityACL = GCU.isStaticProperty(serviceClass.clazz, 'springSecurityACL')
+        if (hasSpringSecurityACL || serviceIsAnnotated(serviceClass.clazz)) {
+          serviceNames << GrailsNameUtils.getPropertyNameRepresentation(serviceClass.clazz.name)
+        }
+      }
+
+      if (serviceNames) {
+        securedServicesInterceptor(BeanNameAutoProxyCreator) {
+          proxyTargetClass = true
+          beanNames = serviceNames
+          interceptorNames = ['methodSecurityInterceptor']
+        }
       }
     }
 

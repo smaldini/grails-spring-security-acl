@@ -152,30 +152,32 @@ class SpringSecurityAclGrailsPlugin {
   }
 
   def onChange = {event ->
-    if (manager?.hasGrailsPlugin('scoped-proxy')) {
-      if (application.isServiceClass(event.source)) {
-        def classLoader = application.classLoader
-        def SPU = classLoader.loadClass('grails.plugin.scopedproxy.ScopedProxyUtils', false)
-        def newClass = classLoader.loadClass(event.source.name, false) // make sure we get the new class
-        def grailsClass = application.getServiceClass(event.source.name)
-        def beanName = grailsClass.propertyName
-        def scope = SPU.getScope(newClass)
-        def proxyBeanName = SPU.getProxyBeanName(beanName)
+    if (manager?.hasGrailsPlugin('scoped-proxy') &&
+            application.isServiceClass(event.source) &&
+            (GCU.isStaticProperty(event.source, 'springSecurityACL') ||
+                    serviceIsAnnotated(event.source))) {
 
-        SPU.fireWillReloadIfNecessary(application, proxyBeanName, beanName)
+      def classLoader = application.classLoader
+      def SPU = classLoader.loadClass('grails.plugin.scopedproxy.ScopedProxyUtils', false)
+      def newClass = classLoader.loadClass(event.source.name, false) // make sure we get the new class
+      def grailsClass = application.getServiceClass(event.source.name)
+      def beanName = grailsClass.propertyName
+      def scope = SPU.getScope(newClass)
+      def proxyBeanName = SPU.getProxyBeanName(beanName)
 
-        def beanDefinitions = beans {
-          "$proxyBeanName"(grailsClass.getClazz()) { bean ->
-            bean.autowire = true
-            bean.scope = scope
-          }
+      SPU.fireWillReloadIfNecessary(application, proxyBeanName, beanName)
+
+      def beanDefinitions = beans {
+        "$proxyBeanName"(grailsClass.getClazz()) { bean ->
+          bean.autowire = true
+          bean.scope = scope
         }
-        SPU.buildProxy(beanDefinitions, classLoader, proxyBeanName, newClass, beanName, ['methodSecurityInterceptor'])
-
-        beanDefinitions.registerBeans(event.ctx)
-
-        SPU.fireWasReloadedIfNecessary(application, proxyBeanName, beanName)
       }
+      SPU.buildProxy(beanDefinitions, classLoader, proxyBeanName, newClass, beanName, ['methodSecurityInterceptor'])
+
+      beanDefinitions.registerBeans(event.ctx)
+
+      SPU.fireWasReloadedIfNecessary(application, proxyBeanName, beanName)
     }
   }
 
